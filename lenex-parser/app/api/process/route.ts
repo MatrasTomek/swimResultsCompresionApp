@@ -4,20 +4,39 @@ import { NextRequest, NextResponse } from 'next/server';
 import { mergeZawodnicy, processLxfFiles, ZawodnicyMap } from '@/lib/lenex';
 import { parseXlsx } from '@/lib/xlsx-parser';
 
-const DATA_FILE = path.join(process.cwd(), 'data', 'zawodnicy.json');
+const DATA_DIR = path.join(process.cwd(), 'data');
+
+function resultsPath(version: number): string {
+  return path.join(DATA_DIR, `results_${version}.json`);
+}
+
+async function getLatestVersion(): Promise<number> {
+  try {
+    const files = await fs.readdir(DATA_DIR);
+    const versions = files
+      .map((f) => /^results_(\d+)\.json$/.exec(f))
+      .filter(Boolean)
+      .map((m) => parseInt(m![1], 10));
+    return versions.length ? Math.max(...versions) : 0;
+  } catch {
+    return 0;
+  }
+}
 
 async function loadExisting(): Promise<ZawodnicyMap> {
+  const latest = await getLatestVersion();
+  if (latest === 0) return {};
   try {
-    const text = await fs.readFile(DATA_FILE, 'utf-8');
+    const text = await fs.readFile(resultsPath(latest), 'utf-8');
     return JSON.parse(text) as ZawodnicyMap;
   } catch {
     return {};
   }
 }
 
-async function saveData(data: ZawodnicyMap): Promise<void> {
-  await fs.mkdir(path.dirname(DATA_FILE), { recursive: true });
-  await fs.writeFile(DATA_FILE, JSON.stringify(data, null, '\t'), 'utf-8');
+async function saveData(data: ZawodnicyMap, version: number): Promise<void> {
+  await fs.mkdir(DATA_DIR, { recursive: true });
+  await fs.writeFile(resultsPath(version), JSON.stringify(data, null, '\t'), 'utf-8');
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
@@ -89,11 +108,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
     const existing = await loadExisting();
     const merged = mergeZawodnicy(existing, newData);
-    await saveData(merged);
+    const latestVersion = await getLatestVersion();
+    const nextVersion = latestVersion + 1;
+    await saveData(merged, nextVersion);
 
     const totalAthletes = Object.keys(merged).length;
     const json = JSON.stringify(merged, null, '\t');
-    const filename = encodeURIComponent(`zawodnicy_${clubName}.json`);
+    const filename = encodeURIComponent(`results_${nextVersion}.json`);
 
     return new NextResponse(json, {
       status: 200,
@@ -103,6 +124,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         'X-Athlete-Count': String(totalAthletes),
         'X-New-Athlete-Count': String(newAthleteCount),
         'X-Errors': errors.length ? JSON.stringify(errors) : '',
+        'X-Version': String(nextVersion),
       },
     });
   } catch (err) {

@@ -29,12 +29,42 @@ function parseDystans(raw: string): { dystans: string; styl: string } {
   return { dystans: m[1], styl: m[2] };
 }
 
+// Each discipline group spans 5 data columns; groups are separated by 1 null column.
+const GROUP_SIZE = 6;
+
 /**
- * Parses a single .xlsx file buffer (best-times format) and merges one
- * athlete's results into `output`.
+ * A row is a section header when it contains "Pkt." at positions 4, 10, 16, ...
+ * (offset 4 within each GROUP_SIZE block). Returns the col indices of all "Pkt." cells.
+ */
+function findPktCols(row: unknown[]): number[] {
+  const cols: number[] = [];
+  for (let i = 4; i < row.length; i += GROUP_SIZE) {
+    if (typeof row[i] === 'string' && (row[i] as string).trim() === 'Pkt.') {
+      cols.push(i);
+    }
+  }
+  return cols;
+}
+
+/**
+ * Extracts discipline names from a section header row using the "Pkt." positions.
+ * Discipline name sits 4 columns before "Pkt." in the same group.
+ */
+function extractDisciplines(row: unknown[], pktCols: number[]): string[] {
+  return pktCols.map((pktCol) => {
+    const nameCell = row[pktCol - 4];
+    return typeof nameCell === 'string' ? nameCell.trim() : '';
+  });
+}
+
+/**
+ * Parses a single .xlsx file buffer (best-times multi-column format) and
+ * merges one athlete's results into `output`.
  *
- * Expected columns (row 0 = header, then data rows):
- *   Dystans | Basen | Czas | Pkt. | Data | Miasto (Kraj) | Zawody
+ * Format:
+ *   Row 0  — title/season header (skipped)
+ *   Section headers — discipline names at cols 0, 6, 12, … with "Pkt." at cols 4, 10, 16, …
+ *   Data rows  — for each group g at offset g*6: [Date, City, Pool, Time, Points]
  */
 export function parseXlsx(
   buffer: Buffer,
@@ -48,8 +78,8 @@ export function parseXlsx(
   const ws = wb.Sheets[wb.SheetNames[0]];
   if (!ws) throw new Error('Brak arkusza w pliku XLSX');
 
-  const rows = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1 });
-  if (rows.length < 2) return; // only header or empty
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, defval: null });
+  if (rows.length < 2) return;
 
   const key = normalizeKey(lastname, firstname);
   if (!key) throw new Error('Nieprawidłowe imię lub nazwisko');
@@ -64,36 +94,58 @@ export function parseXlsx(
     } satisfies Zawodnik;
   }
 
-  // Skip header row (index 0)
+  let currentDisciplines: string[] = [];
+
+  // Skip row 0 (title/season row)
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i] as unknown[];
-    if (!row || row.length < 7) continue;
+    if (!row) continue;
 
-    const [dystansRaw, basen, czas, pktRaw, dataRaw, miasto, zawody] = row.map(
-      (v) => (v === undefined || v === null ? '' : String(v).trim())
-    );
+    const pktCols = findPktCols(row);
 
-    if (!czas || !dataRaw || !dystansRaw) continue;
+    if (pktCols.length > 0) {
+      currentDisciplines = extractDisciplines(row, pktCols);
+      continue;
+    }
 
-    const { dystans, styl } = parseDystans(dystansRaw);
-    const data = parsePlDate(dataRaw);
-    const pkt = parseInt(pktRaw);
+    // Data row — process each known discipline group
+    for (let g = 0; g < currentDisciplines.length; g++) {
+      const discipline = currentDisciplines[g];
+      if (!discipline) continue;
 
-    const start: Start = {
-      zawody: zawody ?? '',
-      data,
-      miejscowosc: miasto ?? '',
-      basen: basen ?? '',
-      konkurencja_nr: 0,
-      dystans,
-      styl,
-      plec: '',
-      tor: 0,
-      czas,
-      punkty: isNaN(pkt) || pkt <= 0 ? null : pkt,
-      timestamp_pobrania: timestamp,
-    };
+      const offset = g * GROUP_SIZE;
+      const dateRaw = row[offset];
+      const city = row[offset + 1];
+      const pool = row[offset + 2];
+      const time = row[offset + 3];
+      const ptsRaw = row[offset + 4];
 
-    output[key].starty.push(start);
+      if (dateRaw === null || time === null) continue;
+
+      const dateStr = String(dateRaw).trim();
+      const czassStr = String(time).trim();
+      if (!dateStr || !czassStr) continue;
+
+      const { dystans, styl } = parseDystans(discipline);
+      const data = parsePlDate(dateStr);
+      const ptsNum = Number(ptsRaw);
+
+      const start: Start = {
+        zawody: '',
+        data,
+        miejscowosc: city !== null ? String(city).trim() : '',
+        basen: pool !== null ? String(pool).trim() : '',
+        konkurencja_nr: 0,
+        dystans,
+        styl,
+        plec: '',
+        tor: 0,
+        czas: czassStr,
+        punkty: isNaN(ptsNum) || ptsNum <= 0 ? null : ptsNum,
+        timestamp_pobrania: timestamp,
+      };
+
+      output[key].starty.push(start);
+    }
   }
 }

@@ -41,12 +41,19 @@ export default function Home() {
       const existing = new Set(prev.map((e) => e.file.name));
       const newEntries: FileEntry[] = arr
         .filter((f) => !existing.has(f.name))
-        .map((f) => ({
-          file: f,
-          type: f.name.toLowerCase().endsWith('.xlsx') ? 'xlsx' : 'lxf',
-          imie: '',
-          nazwisko: '',
-        }));
+        .map((f) => {
+          if (!f.name.toLowerCase().endsWith('.xlsx')) {
+            return { file: f, type: 'lxf', imie: '', nazwisko: '' };
+          }
+          // Pre-fill name from filename: "natalia_2025.xlsx" → imie="Natalia"
+          // "jan_kowalski_2025.xlsx" → imie="Jan", nazwisko="Kowalski"
+          const base = f.name.replace(/\.xlsx$/i, '');
+          const parts = base.split('_').filter((p) => !/^\d{4}$/.test(p));
+          const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+          const imie = parts.length >= 1 ? capitalize(parts[0]) : '';
+          const nazwisko = parts.length === 2 ? capitalize(parts[1]) : '';
+          return { file: f, type: 'xlsx', imie, nazwisko };
+        });
       return [...prev, ...newEntries];
     });
     // Reset athlete selection when files change
@@ -162,16 +169,17 @@ export default function Home() {
       const totalCount = res.headers.get('X-Athlete-Count') ?? '?';
       const newCount = res.headers.get('X-New-Athlete-Count') ?? '?';
       const errorsRaw = res.headers.get('X-Errors') ?? '';
+      const version = res.headers.get('X-Version') ?? '1';
       const blob = await res.blob();
 
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `zawodnicy_${clubName.trim()}.json`;
+      a.download = `results_${version}.json`;
       a.click();
       URL.revokeObjectURL(url);
 
-      let msg = `Zapisano i pobrano JSON. Nowi/zaktualizowani zawodnicy z pliku: ${newCount}. Łącznie w bazie: ${totalCount} zawodnika/ów z klubu „${clubName.trim()}".`;
+      let msg = `Zapisano i pobrano results_${version}.json. Nowi/zaktualizowani zawodnicy z pliku: ${newCount}. Łącznie w bazie: ${totalCount} zawodnika/ów z klubu „${clubName.trim()}".`;
       if (errorsRaw) {
         const errs: string[] = JSON.parse(errorsRaw);
         msg += ` Błędy (${errs.length}): ${errs.join('; ')}`;
@@ -222,7 +230,7 @@ export default function Home() {
           </h1>
           <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
             Wgraj pliki <code>.lxf</code> lub <code>.xlsx</code> i podaj nazwę klubu,
-            aby pobrać plik <code>zawodnicy.json</code>.
+            aby pobrać plik <code>results_N.json</code>.
           </p>
         </div>
 
@@ -440,7 +448,8 @@ export default function Home() {
           </button>
         </form>
 
-        {/* Clear database */}
+        {/* Clear database — temporarily hidden */}
+        {false && (
         <div className="border-t border-zinc-200 dark:border-zinc-700 pt-4">
           <button
             type="button"
@@ -455,6 +464,7 @@ export default function Home() {
             Usuwa zapisany plik JSON — następne wgranie zacznie od zera.
           </p>
         </div>
+        )}
 
         {/* Status message */}
         {message && (
