@@ -1,5 +1,23 @@
+import { promises as fs } from 'fs';
+import path from 'path';
 import { NextRequest, NextResponse } from 'next/server';
-import { processLxfFiles } from '@/lib/lenex';
+import { mergeZawodnicy, processLxfFiles, ZawodnicyMap } from '@/lib/lenex';
+
+const DATA_FILE = path.join(process.cwd(), 'data', 'zawodnicy.json');
+
+async function loadExisting(): Promise<ZawodnicyMap> {
+  try {
+    const text = await fs.readFile(DATA_FILE, 'utf-8');
+    return JSON.parse(text) as ZawodnicyMap;
+  } catch {
+    return {};
+  }
+}
+
+async function saveData(data: ZawodnicyMap): Promise<void> {
+  await fs.mkdir(path.dirname(DATA_FILE), { recursive: true });
+  await fs.writeFile(DATA_FILE, JSON.stringify(data, null, '\t'), 'utf-8');
+}
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
@@ -21,17 +39,22 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       files.push({ name: file.name, buffer: Buffer.from(arrayBuffer) });
     }
 
-    const { result, errors } = processLxfFiles(files, clubName);
-    const athleteCount = Object.keys(result).length;
+    const { result: newData, errors } = processLxfFiles(files, clubName);
+    const newAthleteCount = Object.keys(newData).length;
 
-    if (athleteCount === 0 && errors.length === 0) {
+    if (newAthleteCount === 0 && errors.length === 0) {
       return NextResponse.json(
         { error: `Nie znaleziono zawodników dla klubu "${clubName}" w przesłanych plikach.` },
         { status: 404 }
       );
     }
 
-    const json = JSON.stringify(result, null, '\t');
+    const existing = await loadExisting();
+    const merged = mergeZawodnicy(existing, newData);
+    await saveData(merged);
+
+    const totalAthletes = Object.keys(merged).length;
+    const json = JSON.stringify(merged, null, '\t');
     const filename = encodeURIComponent(`zawodnicy_${clubName}.json`);
 
     return new NextResponse(json, {
@@ -39,7 +62,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       headers: {
         'Content-Type': 'application/json; charset=utf-8',
         'Content-Disposition': `attachment; filename="${filename}"`,
-        'X-Athlete-Count': String(athleteCount),
+        'X-Athlete-Count': String(totalAthletes),
+        'X-New-Athlete-Count': String(newAthleteCount),
         'X-Errors': errors.length ? JSON.stringify(errors) : '',
       },
     });

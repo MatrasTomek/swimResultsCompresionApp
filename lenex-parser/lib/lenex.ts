@@ -226,6 +226,51 @@ export function parseLxf(
 }
 
 /**
+ * Merges `incoming` into `existing` without duplicating starts.
+ * A start is identified by: zawody + data + konkurencja_nr + tor.
+ */
+export function mergeZawodnicy(
+  existing: ZawodnicyMap,
+  incoming: ZawodnicyMap
+): ZawodnicyMap {
+  const merged: ZawodnicyMap = {};
+
+  // Deep-copy existing entries
+  for (const [key, zawodnik] of Object.entries(existing)) {
+    merged[key] = { ...zawodnik, starty: [...zawodnik.starty] };
+  }
+
+  for (const [key, zawodnik] of Object.entries(incoming)) {
+    if (!merged[key]) {
+      merged[key] = { ...zawodnik, starty: [] };
+    }
+
+    const existingFp = new Set(
+      merged[key].starty.map(
+        (s) => `${s.zawody}|${s.data}|${s.konkurencja_nr}|${s.tor}`
+      )
+    );
+
+    for (const start of zawodnik.starty) {
+      const fp = `${start.zawody}|${start.data}|${start.konkurencja_nr}|${start.tor}`;
+      if (!existingFp.has(fp)) {
+        merged[key].starty.push(start);
+        existingFp.add(fp);
+      }
+    }
+
+    merged[key].starty.sort((a, b) => {
+      const da = a.data.split('/').reverse().join('');
+      const db = b.data.split('/').reverse().join('');
+      if (da !== db) return da.localeCompare(db);
+      return a.konkurencja_nr - b.konkurencja_nr;
+    });
+  }
+
+  return merged;
+}
+
+/**
  * Processes multiple .lxf buffers and returns a merged ZawodnicyMap.
  */
 export function processLxfFiles(

@@ -53,7 +53,8 @@ export default function Home() {
         throw new Error(body.error ?? res.statusText);
       }
 
-      const athleteCount = res.headers.get('X-Athlete-Count') ?? '?';
+      const totalCount = res.headers.get('X-Athlete-Count') ?? '?';
+      const newCount = res.headers.get('X-New-Athlete-Count') ?? '?';
       const errorsRaw = res.headers.get('X-Errors') ?? '';
       const blob = await res.blob();
 
@@ -64,7 +65,7 @@ export default function Home() {
       a.click();
       URL.revokeObjectURL(url);
 
-      let msg = `Pobrano JSON dla ${athleteCount} zawodnika/ów z klubu „${clubName.trim()}".`;
+      let msg = `Zapisano i pobrano JSON. Nowi/zaktualizowani zawodnicy z pliku: ${newCount}. Łącznie w bazie: ${totalCount} zawodnika/ów z klubu „${clubName.trim()}".`;
       if (errorsRaw) {
         const errs: string[] = JSON.parse(errorsRaw);
         msg += ` Błędy (${errs.length}): ${errs.join('; ')}`;
