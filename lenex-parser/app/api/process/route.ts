@@ -2,6 +2,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { NextRequest, NextResponse } from 'next/server';
 import { mergeZawodnicy, processLxfFiles, ZawodnicyMap } from '@/lib/lenex';
+import { parseXlsx } from '@/lib/xlsx-parser';
 
 const DATA_FILE = path.join(process.cwd(), 'data', 'zawodnicy.json');
 
@@ -28,18 +29,51 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ error: 'Brak nazwy klubu' }, { status: 400 });
     }
 
-    const fileEntries = formData.getAll('files') as File[];
-    if (!fileEntries.length) {
-      return NextResponse.json({ error: 'Brak plików .lxf' }, { status: 400 });
+    const lxfEntries = formData.getAll('files') as File[];
+    const xlsxEntries = formData.getAll('xlsxFiles') as File[];
+
+    if (!lxfEntries.length && !xlsxEntries.length) {
+      return NextResponse.json({ error: 'Brak plików do przetworzenia' }, { status: 400 });
     }
 
-    const files: { name: string; buffer: Buffer }[] = [];
-    for (const file of fileEntries) {
-      const arrayBuffer = await file.arrayBuffer();
-      files.push({ name: file.name, buffer: Buffer.from(arrayBuffer) });
+    const newData: ZawodnicyMap = {};
+    const errors: string[] = [];
+    const timestamp = new Date().toISOString();
+
+    // Process .lxf files
+    if (lxfEntries.length) {
+      const lxfFiles: { name: string; buffer: Buffer }[] = [];
+      for (const file of lxfEntries) {
+        const ab = await file.arrayBuffer();
+        lxfFiles.push({ name: file.name, buffer: Buffer.from(ab) });
+      }
+      const { result, errors: lxfErrors } = processLxfFiles(lxfFiles, clubName);
+      Object.assign(newData, result);
+      errors.push(...lxfErrors);
     }
 
-    const { result: newData, errors } = processLxfFiles(files, clubName);
+    // Process .xlsx files — each has a corresponding imie/nazwisko by index
+    const xlsxImie = formData.getAll('xlsxImie') as string[];
+    const xlsxNazwisko = formData.getAll('xlsxNazwisko') as string[];
+
+    for (let i = 0; i < xlsxEntries.length; i++) {
+      const file = xlsxEntries[i];
+      const imie = (xlsxImie[i] ?? '').trim();
+      const nazwisko = (xlsxNazwisko[i] ?? '').trim();
+
+      if (!imie || !nazwisko) {
+        errors.push(`${file.name}: brak imienia lub nazwiska zawodnika`);
+        continue;
+      }
+
+      try {
+        const ab = await file.arrayBuffer();
+        parseXlsx(Buffer.from(ab), imie, nazwisko, clubName, newData, timestamp);
+      } catch (err) {
+        errors.push(`${file.name}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
     const newAthleteCount = Object.keys(newData).length;
 
     if (newAthleteCount === 0 && errors.length === 0) {

@@ -247,12 +247,12 @@ export function mergeZawodnicy(
 
     const existingFp = new Set(
       merged[key].starty.map(
-        (s) => `${s.zawody}|${s.data}|${s.konkurencja_nr}|${s.tor}`
+        (s) => `${s.zawody}|${s.data}|${s.dystans}|${s.styl}|${s.konkurencja_nr}|${s.tor}`
       )
     );
 
     for (const start of zawodnik.starty) {
-      const fp = `${start.zawody}|${start.data}|${start.konkurencja_nr}|${start.tor}`;
+      const fp = `${start.zawody}|${start.data}|${start.dystans}|${start.styl}|${start.konkurencja_nr}|${start.tor}`;
       if (!existingFp.has(fp)) {
         merged[key].starty.push(start);
         existingFp.add(fp);
