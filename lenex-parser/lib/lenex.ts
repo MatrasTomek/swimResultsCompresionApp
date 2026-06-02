@@ -86,12 +86,14 @@ export function normalizeKey(lastname: string, firstname: string): string {
 /**
  * Parses a single .lxf file buffer and returns athletes from the given club.
  * Merges results into the provided `output` map (mutates it).
+ * If `filterKeys` is provided, only athletes whose key is in the set are processed.
  */
 export function parseLxf(
   buffer: Buffer,
   clubName: string,
   output: ZawodnicyMap,
-  timestamp: string
+  timestamp: string,
+  filterKeys?: Set<string>
 ): void {
   // 1. Unzip
   const zip = new AdmZip(buffer);
@@ -172,6 +174,7 @@ export function parseLxf(
 
         const key = normalizeKey(lastname, firstname);
         if (!key) continue;
+        if (filterKeys && !filterKeys.has(key)) continue;
 
         // Initialize athlete entry if not present
         if (!output[key]) {
@@ -272,10 +275,12 @@ export function mergeZawodnicy(
 
 /**
  * Processes multiple .lxf buffers and returns a merged ZawodnicyMap.
+ * If `filterKeys` is provided, only athletes whose keys are in the set are included.
  */
 export function processLxfFiles(
   files: { name: string; buffer: Buffer }[],
-  clubName: string
+  clubName: string,
+  filterKeys?: Set<string>
 ): { result: ZawodnicyMap; errors: string[] } {
   const output: ZawodnicyMap = {};
   const errors: string[] = [];
@@ -283,7 +288,7 @@ export function processLxfFiles(
 
   for (const file of files) {
     try {
-      parseLxf(file.buffer, clubName, output, timestamp);
+      parseLxf(file.buffer, clubName, output, timestamp, filterKeys);
     } catch (err) {
       errors.push(`${file.name}: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -300,4 +305,70 @@ export function processLxfFiles(
   }
 
   return { result: output, errors };
+}
+
+export interface AthleteInfo {
+  key: string;
+  firstname: string;
+  lastname: string;
+}
+
+/**
+ * Returns the list of athletes from the given club across multiple .lxf buffers.
+ * Does not parse results — fast, lightweight scan.
+ */
+export function getClubAthletes(
+  files: { name: string; buffer: Buffer }[],
+  clubName: string
+): { athletes: AthleteInfo[]; errors: string[] } {
+  const seen = new Map<string, AthleteInfo>();
+  const errors: string[] = [];
+
+  const parser = new XMLParser({
+    ignoreAttributes: false,
+    attributeNamePrefix: '',
+    isArray: (name) => ['MEET', 'CLUB', 'ATHLETE'].includes(name),
+  });
+
+  for (const file of files) {
+    try {
+      const zip = new AdmZip(file.buffer);
+      const xmlEntry = zip.getEntries().find((e) => {
+        const name = e.entryName.toLowerCase();
+        return name.endsWith('.lef') || name.endsWith('.xml');
+      });
+      if (!xmlEntry) throw new Error('Brak pliku .lef/.xml w archiwum ZIP');
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const doc = parser.parse(xmlEntry.getData().toString('utf-8')) as any;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const meets: any[] = doc?.LENEX?.MEETS?.MEET ?? [];
+
+      for (const meet of meets) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const clubs: any[] = meet?.CLUBS?.CLUB ?? [];
+        for (const club of clubs) {
+          if (String(club['name'] ?? '').toLowerCase() !== clubName.toLowerCase()) continue;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const athletes: any[] = club?.ATHLETES?.ATHLETE ?? [];
+          for (const ath of athletes) {
+            const firstname = String(ath['firstname'] ?? '');
+            const lastname = String(ath['lastname'] ?? '');
+            const key = normalizeKey(lastname, firstname);
+            if (key && !seen.has(key)) {
+              seen.set(key, { key, firstname, lastname });
+            }
+          }
+        }
+      }
+    } catch (err) {
+      errors.push(`${file.name}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  const athletes = Array.from(seen.values()).sort((a, b) =>
+    a.lastname.localeCompare(b.lastname, 'pl') || a.firstname.localeCompare(b.firstname, 'pl')
+  );
+
+  return { athletes, errors };
 }

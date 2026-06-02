@@ -13,12 +13,21 @@ interface FileEntry {
   nazwisko: string;
 }
 
+interface AthleteOption {
+  key: string;
+  firstname: string;
+  lastname: string;
+  selected: boolean;
+}
+
 export default function Home() {
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [clubName, setClubName] = useState('');
   const [status, setStatus] = useState<Status>('idle');
   const [message, setMessage] = useState('');
   const [isDragging, setIsDragging] = useState(false);
+  const [athletes, setAthletes] = useState<AthleteOption[] | null>(null);
+  const [athletesLoading, setAthletesLoading] = useState(false);
   const lxfInputRef = useRef<HTMLInputElement>(null);
   const xlsxInputRef = useRef<HTMLInputElement>(null);
 
@@ -40,15 +49,55 @@ export default function Home() {
         }));
       return [...prev, ...newEntries];
     });
+    // Reset athlete selection when files change
+    setAthletes(null);
   }, []);
 
-  const removeEntry = (name: string) =>
+  const removeEntry = (name: string) => {
     setEntries((prev) => prev.filter((e) => e.file.name !== name));
+    setAthletes(null);
+  };
 
   const updateEntry = (name: string, field: 'imie' | 'nazwisko', value: string) =>
     setEntries((prev) =>
       prev.map((e) => (e.file.name === name ? { ...e, [field]: value } : e))
     );
+
+  const toggleAthlete = (key: string) =>
+    setAthletes((prev) =>
+      prev ? prev.map((a) => (a.key === key ? { ...a, selected: !a.selected } : a)) : prev
+    );
+
+  const toggleAllAthletes = (selected: boolean) =>
+    setAthletes((prev) => (prev ? prev.map((a) => ({ ...a, selected })) : prev));
+
+  const handleLoadAthletes = async () => {
+    if (!clubName.trim()) return;
+    const lxfEntries = entries.filter((e) => e.type === 'lxf');
+    if (!lxfEntries.length) return;
+
+    setAthletesLoading(true);
+    setAthletes(null);
+    try {
+      const form = new FormData();
+      form.append('clubName', clubName.trim());
+      lxfEntries.forEach((en) => form.append('files', en.file));
+
+      const res = await fetch('/api/athletes', { method: 'POST', body: form });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? res.statusText);
+
+      const opts: AthleteOption[] = (body.athletes as { key: string; firstname: string; lastname: string }[]).map(
+        (a) => ({ ...a, selected: true })
+      );
+      setAthletes(opts);
+    } catch (err) {
+      setStatus('error');
+      setMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAthletesLoading(false);
+    }
+  };
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
@@ -92,6 +141,15 @@ export default function Home() {
       form.append('xlsxImie', en.imie.trim());
       form.append('xlsxNazwisko', en.nazwisko.trim());
     });
+
+    // If athlete selection is active and not all selected, send filter
+    if (athletes) {
+      const selectedKeys = athletes.filter((a) => a.selected).map((a) => a.key);
+      const allSelected = selectedKeys.length === athletes.length;
+      if (!allSelected) {
+        form.append('selectedAthletes', JSON.stringify(selectedKeys));
+      }
+    }
 
     try {
       const res = await fetch('/api/process', { method: 'POST', body: form });
@@ -145,11 +203,15 @@ export default function Home() {
   const xlsxMissingName = entries.some(
     (en) => en.type === 'xlsx' && (!en.imie.trim() || !en.nazwisko.trim())
   );
+  const hasLxf = entries.some((en) => en.type === 'lxf');
+  const canLoadAthletes = hasLxf && clubName.trim().length > 0 && !athletesLoading;
+  const selectedCount = athletes ? athletes.filter((a) => a.selected).length : 0;
   const canSubmit =
     entries.length > 0 &&
     clubName.trim().length > 0 &&
     !xlsxMissingName &&
-    status !== 'loading';
+    status !== 'loading' &&
+    (!athletes || selectedCount > 0);
 
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 flex items-center justify-center p-6">
@@ -282,13 +344,90 @@ export default function Home() {
               id="clubName"
               type="text"
               value={clubName}
-              onChange={(e) => setClubName(e.target.value)}
+              onChange={(e) => { setClubName(e.target.value); setAthletes(null); }}
               placeholder="np. Olimpijczyk Brzesko"
               className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800
                          text-zinc-900 dark:text-zinc-100 px-3 py-2 text-sm
                          focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
+
+          {/* Athlete selector (LXF only) */}
+          {hasLxf && (
+            <div className="rounded-xl border border-zinc-200 dark:border-zinc-700 p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                  Wybór zawodników z pliku .lxf
+                </span>
+                <button
+                  type="button"
+                  onClick={handleLoadAthletes}
+                  disabled={!canLoadAthletes}
+                  className="rounded-lg bg-zinc-100 dark:bg-zinc-700 px-3 py-1.5 text-xs font-medium
+                             text-zinc-700 dark:text-zinc-200 hover:bg-zinc-200 dark:hover:bg-zinc-600
+                             disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  {athletesLoading ? 'Ładowanie…' : athletes ? '↻ Odśwież listę' : 'Załaduj listę zawodników'}
+                </button>
+              </div>
+
+              {athletes === null && !athletesLoading && (
+                <p className="text-xs text-zinc-400">
+                  Kliknij &bdquo;Załaduj listę zawodników&rdquo;, aby wybrać konkretnych zawodników — lub pomiń, aby przetworzyć cały klub.
+                </p>
+              )}
+
+              {athletes !== null && (
+                <>
+                  {/* Select all / none */}
+                  <div className="flex gap-3 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => toggleAllAthletes(true)}
+                      className="text-blue-600 dark:text-blue-400 hover:underline"
+                    >
+                      Zaznacz wszystkich
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => toggleAllAthletes(false)}
+                      className="text-zinc-500 dark:text-zinc-400 hover:underline"
+                    >
+                      Odznacz wszystkich
+                    </button>
+                    <span className="ml-auto text-zinc-400">
+                      {selectedCount} / {athletes.length}
+                    </span>
+                  </div>
+
+                  {athletes.length === 0 ? (
+                    <p className="text-xs text-zinc-400">
+                      Nie znaleziono zawodników dla podanej nazwy klubu.
+                    </p>
+                  ) : (
+                    <ul className="max-h-48 overflow-y-auto space-y-1 pr-1">
+                      {athletes.map((ath) => (
+                        <li key={ath.key}>
+                          <label className="flex items-center gap-2 cursor-pointer rounded-md px-2 py-1
+                                            hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">
+                            <input
+                              type="checkbox"
+                              checked={ath.selected}
+                              onChange={() => toggleAthlete(ath.key)}
+                              className="accent-blue-600"
+                            />
+                            <span className="text-sm text-zinc-800 dark:text-zinc-200">
+                              {ath.lastname} {ath.firstname}
+                            </span>
+                          </label>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </>
+              )}
+            </div>
+          )}
 
           {/* Submit */}
           <button

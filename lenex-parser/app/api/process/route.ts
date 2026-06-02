@@ -36,6 +36,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ error: 'Brak plików do przetworzenia' }, { status: 400 });
     }
 
+    // Optional athlete key filter for .lxf files
+    const selectedRaw = formData.get('selectedAthletes') as string | null;
+    const filterKeys = selectedRaw ? new Set<string>(JSON.parse(selectedRaw) as string[]) : undefined;
+
     const newData: ZawodnicyMap = {};
     const errors: string[] = [];
     const timestamp = new Date().toISOString();
@@ -47,7 +51,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         const ab = await file.arrayBuffer();
         lxfFiles.push({ name: file.name, buffer: Buffer.from(ab) });
       }
-      const { result, errors: lxfErrors } = processLxfFiles(lxfFiles, clubName);
+      const { result, errors: lxfErrors } = processLxfFiles(lxfFiles, clubName, filterKeys);
       Object.assign(newData, result);
       errors.push(...lxfErrors);
     }
