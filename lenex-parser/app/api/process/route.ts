@@ -24,13 +24,25 @@ async function getLatestVersion(): Promise<number> {
 }
 
 async function loadExisting(): Promise<ZawodnicyMap> {
+  // Load unversioned base as foundation
+  let base: ZawodnicyMap = {};
+  try {
+    const text = await fs.readFile(path.join(DATA_DIR, 'results.json'), 'utf-8');
+    base = JSON.parse(text) as ZawodnicyMap;
+  } catch {
+    // no base file, that's fine
+  }
+
+  // Overlay latest versioned file on top
   const latest = await getLatestVersion();
-  if (latest === 0) return {};
+  if (latest === 0) return base;
+
   try {
     const text = await fs.readFile(resultsPath(latest), 'utf-8');
-    return JSON.parse(text) as ZawodnicyMap;
+    const versioned = JSON.parse(text) as ZawodnicyMap;
+    return mergeZawodnicy(base, versioned);
   } catch {
-    return {};
+    return base;
   }
 }
 
